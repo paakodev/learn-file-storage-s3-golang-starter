@@ -1,7 +1,9 @@
 package main
 
 import (
+	"encoding/base64"
 	"fmt"
+	"io"
 	"net/http"
 
 	"github.com/bootdotdev/learn-file-storage-s3-golang-starter/internal/auth"
@@ -28,10 +30,49 @@ func (cfg *apiConfig) handlerUploadThumbnail(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
+	videoMeta, err := cfg.db.GetVideo(videoID)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Unable to get video metadata", err)
+		return
+	}
+	if videoMeta.UserID != userID {
+		respondWithError(w, http.StatusUnauthorized, "User does not own this video", fmt.Errorf("user %s does not own video %s", userID, videoID))
+		return
+	}
 
 	fmt.Println("uploading thumbnail for video", videoID, "by user", userID)
 
-	// TODO: implement the upload here
+	const maxMemory = 10 << 20
+	r.ParseMultipartForm(maxMemory)
 
-	respondWithJSON(w, http.StatusOK, struct{}{})
+	// "thumbnail" should match the HTML form input name
+	file, header, err := r.FormFile("thumbnail")
+	if err != nil {
+		respondWithError(w, http.StatusBadRequest, "Unable to parse form file", err)
+		return
+	}
+	defer file.Close()
+
+	mediaType := header.Header.Get("Content-Type")
+	if mediaType != "image/jpeg" && mediaType != "image/png" {
+		respondWithError(w, http.StatusBadRequest, "Invalid media type", fmt.Errorf("media type must be image/jpeg or image/png"))
+		return
+	}
+
+	data, err := io.ReadAll(file)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Unable to read file", err)
+		return
+	}
+
+	thumbnail := base64.StdEncoding.EncodeToString(data)
+	encodedThumbnail := "data:" + mediaType + ";base64," + thumbnail
+	videoMeta.ThumbnailURL = &encodedThumbnail
+	err = cfg.db.UpdateVideo(videoMeta)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Unable to update video with thumbnail", err)
+		return
+	}
+
+	respondWithJSON(w, http.StatusOK, videoMeta)
 }
