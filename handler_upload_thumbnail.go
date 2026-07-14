@@ -1,10 +1,11 @@
 package main
 
 import (
-	"encoding/base64"
 	"fmt"
 	"io"
 	"net/http"
+	"os"
+	"path/filepath"
 
 	"github.com/bootdotdev/learn-file-storage-s3-golang-starter/internal/auth"
 	"github.com/google/uuid"
@@ -59,15 +60,38 @@ func (cfg *apiConfig) handlerUploadThumbnail(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
+	mediaTypeExtension := ""
+	switch mediaType {
+	case "image/jpeg":
+		mediaTypeExtension = ".jpg"
+	case "image/png":
+		mediaTypeExtension = ".png"
+	default:
+		respondWithError(w, http.StatusBadRequest, "Invalid media type", fmt.Errorf("media type must be image/jpeg or image/png"))
+		return
+	}
+
 	data, err := io.ReadAll(file)
 	if err != nil {
 		respondWithError(w, http.StatusInternalServerError, "Unable to read file", err)
 		return
 	}
 
-	thumbnail := base64.StdEncoding.EncodeToString(data)
-	encodedThumbnail := "data:" + mediaType + ";base64," + thumbnail
-	videoMeta.ThumbnailURL = &encodedThumbnail
+	thumbnailFile := filepath.Join(cfg.assetsRoot, videoID.String()+mediaTypeExtension)
+	f, err := os.Create(thumbnailFile)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Unable to create thumbnail file", err)
+		return
+	}
+	defer f.Close()
+	_, err = f.Write(data)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Unable to write thumbnail file", err)
+		return
+	}
+
+	thumbnailURL := "http://docker:8091/assets/" + videoID.String() + mediaTypeExtension
+	videoMeta.ThumbnailURL = &thumbnailURL
 	err = cfg.db.UpdateVideo(videoMeta)
 	if err != nil {
 		respondWithError(w, http.StatusInternalServerError, "Unable to update video with thumbnail", err)
